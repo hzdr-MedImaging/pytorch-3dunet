@@ -125,16 +125,20 @@ class DoubleConv(nn.Sequential):
             'ce' -> conv + ELU
         num_groups (int): number of groups for the GroupNorm
         padding (int or tuple): add zero-padding added to all three sides of the input
+        upscale (int): number of the convolution to upscale in encoder if DoubleConv, default: 2
         is3d (bool): if True use Conv3d instead of Conv2d layers
     """
 
     def __init__(self, in_channels, out_channels, encoder, kernel_size=3, order='gcr', num_groups=8, padding=1,
-                 is3d=True):
+                 upscale=2, is3d=True):
         super(DoubleConv, self).__init__()
         if encoder:
             # we're in the encoder path
             conv1_in_channels = in_channels
-            conv1_out_channels = out_channels // 2
+            if upscale is 1:
+              conv1_out_channels = out_channels
+            else:
+              conv1_out_channels = out_channels // 2
             if conv1_out_channels < in_channels:
                 conv1_out_channels = in_channels
             conv2_in_channels, conv2_out_channels = conv1_out_channels, out_channels
@@ -244,12 +248,13 @@ class Encoder(nn.Module):
             in `DoubleConv` module. See `DoubleConv` for more info.
         num_groups (int): number of groups for the GroupNorm
         padding (int or tuple): add zero-padding added to all three sides of the input
+        upscale (int): number of the convolution to upscale in encoder if DoubleConv, default: 2
         is3d (bool): use 3d or 2d convolutions/pooling operation
     """
 
     def __init__(self, in_channels, out_channels, conv_kernel_size=3, apply_pooling=True,
                  pool_kernel_size=2, pool_type='max', basic_module=DoubleConv, conv_layer_order='gcr',
-                 num_groups=8, padding=1, is3d=True):
+                 num_groups=8, padding=1, upscale=2, is3d=True):
         super(Encoder, self).__init__()
         assert pool_type in ['max', 'avg']
         if apply_pooling:
@@ -272,6 +277,7 @@ class Encoder(nn.Module):
                                          order=conv_layer_order,
                                          num_groups=num_groups,
                                          padding=padding,
+                                         upscale=upscale,
                                          is3d=is3d)
 
     def forward(self, x):
@@ -348,8 +354,8 @@ class Decoder(nn.Module):
             return encoder_features + x
 
 
-def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_padding, layer_order, num_groups,
-                    pool_kernel_size, is3d):
+def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_padding, conv_upscale,
+                    layer_order, num_groups, pool_kernel_size, is3d):
     # create encoder path consisting of Encoder modules. Depth of the encoder is equal to `len(f_maps)`
     encoders = []
     for i, out_feature_num in enumerate(f_maps):
@@ -362,6 +368,7 @@ def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_pa
                               conv_kernel_size=conv_kernel_size,
                               num_groups=num_groups,
                               padding=conv_padding,
+                              upscale=conv_upscale,
                               is3d=is3d)
         else:
             encoder = Encoder(f_maps[i - 1], out_feature_num,
@@ -371,6 +378,7 @@ def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_pa
                               num_groups=num_groups,
                               pool_kernel_size=pool_kernel_size,
                               padding=conv_padding,
+                              upscale=conv_upscale,
                               is3d=is3d)
 
         encoders.append(encoder)
