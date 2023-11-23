@@ -125,7 +125,7 @@ class DoubleConv(nn.Sequential):
             'ce' -> conv + ELU
         num_groups (int): number of groups for the GroupNorm
         padding (int or tuple): add zero-padding added to all three sides of the input
-        upscale (int): number of the convolution to upscale in encoder/decoder if DoubleConv, default: 2
+        upscale (int): number of the convolution to upscale in encoder if DoubleConv, default: 2
         is3d (bool): if True use Conv3d instead of Conv2d layers
     """
 
@@ -248,7 +248,7 @@ class Encoder(nn.Module):
             in `DoubleConv` module. See `DoubleConv` for more info.
         num_groups (int): number of groups for the GroupNorm
         padding (int or tuple): add zero-padding added to all three sides of the input
-        upscale (int): number of the convolution to upscale in encoder/decoder if DoubleConv, default: 2
+        upscale (int): number of the convolution to upscale in encoder if DoubleConv, default: 2
         is3d (bool): use 3d or 2d convolutions/pooling operation
     """
 
@@ -386,12 +386,12 @@ def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_pa
     return nn.ModuleList(encoders)
 
 
-def create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, conv_upscale, layer_order, num_groups, is3d):
+def create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, layer_order, num_groups, is3d):
     # create decoder path consisting of the Decoder modules. The length of the decoder list is equal to `len(f_maps) - 1`
     decoders = []
     reversed_f_maps = list(reversed(f_maps))
     for i in range(len(reversed_f_maps) - 1):
-        if basic_module == DoubleConv and conv_upscale is 2:
+        if basic_module == DoubleConv:
             in_feature_num = reversed_f_maps[i] + reversed_f_maps[i + 1]
         else:
             in_feature_num = reversed_f_maps[i]

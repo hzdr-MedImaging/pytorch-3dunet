@@ -32,7 +32,7 @@ class AbstractUNet(nn.Module):
         conv_kernel_size (int or tuple): size of the convolving kernel in the basic_module
         pool_kernel_size (int or tuple): the size of the window
         conv_padding (int or tuple): add zero-padding added to all three sides of the input
-        conv_upscale (int): number of the convolution to upscale in encoder/decoder if DoubleConv, default: 2
+        conv_upscale (int): number of the convolution to upscale in encoder if DoubleConv, default: 2
         is3d (bool): if True the model is 3D, otherwise 2D, default: True
     """
 
@@ -54,8 +54,8 @@ class AbstractUNet(nn.Module):
                                         layer_order, num_groups, pool_kernel_size, is3d)
 
         # create decoder path
-        self.decoders = create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, conv_upscale,
-                                        layer_order, num_groups, is3d)
+        self.decoders = create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, layer_order, num_groups,
+                                        is3d)
 
         # in the last layer a 1×1 convolution reduces the number of output channels to the number of labels
         if is3d:
