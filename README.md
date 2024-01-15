@@ -2,9 +2,8 @@
 
 [![DOI](https://zenodo.org/badge/149826542.svg)](https://doi.org/10.7554/eLife.57613)
 [![Build Status](https://github.com/wolny/pytorch-3dunet/actions/workflows/conda-build.yml/badge.svg)](https://github.com/wolny/pytorch-3dunet/actions/)
-[![Anaconda-Server Badge](https://anaconda.org/awolny/pytorch-3dunet/badges/latest_release_date.svg)](https://anaconda.org/awolny/pytorch-3dunet)
-[![Anaconda-Server Badge](https://anaconda.org/awolny/pytorch-3dunet/badges/downloads.svg)](https://anaconda.org/awolny/pytorch-3dunet)
-[![Anaconda-Server Badge](https://anaconda.org/awolny/pytorch-3dunet/badges/license.svg)](https://anaconda.org/awolny/pytorch-3dunet)
+[![Anaconda-Server Badge](https://anaconda.org/conda-forge/pytorch-3dunet/badges/latest_release_date.svg)](https://anaconda.org/conda-forge/pytorch-3dunet)
+[![Anaconda-Server Badge](https://anaconda.org/conda-forge/pytorch-3dunet/badges/license.svg)](https://anaconda.org/conda-forge/pytorch-3dunet)
 
 # pytorch-3dunet
 
@@ -21,12 +20,12 @@ The code allows for training the U-Net for both: **semantic segmentation** (bina
 ## 2D U-Net
 2D U-Net is also supported, see [2DUnet_confocal](resources/2DUnet_confocal_boundary) or [2DUnet_dsb2018](resources/2DUnet_dsb2018/train_config.yml) for example configuration. 
 Just make sure to keep the singleton z-dimension in your H5 dataset (i.e. `(1, Y, X)` instead of `(Y, X)`) , because data loading / data augmentation requires tensors of rank 3.
-The 2D U-Net itself uses the standard 2D convolutional layers instead of 3D convolutional with kernel size `(1, 3, 3)` for performance reasons.
+The 2D U-Net itself uses the standard 2D convolutional layers instead of 3D convolutions with kernel size `(1, 3, 3)` for performance reasons.
 
 ## Input Data Format
-The input data should be stored in HDF5 files. The HDF5 files for training should contain two datasets: `raw` and `label` (and optionally `weights` dataset). 
-The `raw` dataset should contain the input data, while the `label` dataset should contain the ground truth labels (optional `weights` dataset should contain the values for weighting the loss function in different regions of the input). 
-The format of the `raw` and `label` datasets depends on whether the problem is 2D or 3D and whether the data is single-channel or multi-channel, see the table below:
+The input data should be stored in HDF5 files. The HDF5 files for training should contain two datasets: `raw` and `label`. Optionally, when training with `PixelWiseCrossEntropyLoss` one should provide `weight` dataset.
+The `raw` dataset should contain the input data, while the `label` dataset the ground truth labels. The optional `weight` dataset should contain the values for weighting the loss function in different regions of the input and should be of the same size as `label` dataset.
+The format of the `raw`/`label` datasets depends on whether the problem is 2D or 3D and whether the data is single-channel or multi-channel, see the table below:
 
 |                | 2D           | 3D           |
 |----------------|--------------|--------------|
@@ -35,20 +34,19 @@ The format of the `raw` and `label` datasets depends on whether the problem is 2
 
 
 ## Prerequisites
-- Linux
 - NVIDIA GPU
 - CUDA CuDNN
 
-### Running on Windows
-The package has not been tested on Windows, however some users reported using it successfully on Windows.
+### Running on Windows/OSX
+`pytorch-3dunet` is a cross-platform package and runs on Windows and OS X as well.
 
 
 ## Installation
 - The easiest way to install `pytorch-3dunet` package is via conda/mamba:
 ```
 conda install -c conda-forge mamba
-mamba create -n pytorch3dunet -c pytorch -c nvidia -c conda-forge -c awolny pytorch-3dunet
-conda activate pytorch3dunet
+mamba create -n pytorch-3dunet -c pytorch -c nvidia -c conda-forge pytorch pytorch-cuda=12.1 pytorch-3dunet
+conda activate pytorch-3dunet
 ```
 After installation the following commands are accessible within the conda environment:
 `train3dunet` for training the network and `predict3dunet` for prediction (see below).
@@ -72,8 +70,7 @@ In order to train on your own data just provide the paths to your HDF5 training 
 
 * sample config for 3D semantic segmentation (cell boundary segmentation): [train_config_segmentation.yaml](resources/3DUnet_confocal_boundary/train_config.yml)
 * sample config for 3D regression task (denoising): [train_config_regression.yaml](resources/3DUnet_denoising/train_config_regression.yaml)
-
-The HDF5 files should contain the raw/label data sets in the following axis order: `DHW` (in case of 3D) `CDHW` (in case of 4D).
+* more configs can be found in [resources](resources) directory
 
 One can monitor the training progress with Tensorboard `tensorboard --logdir <checkpoint_dir>/logs/` (you need `tensorflow` installed in your conda env), where `checkpoint_dir` is the path to the checkpoint directory specified in the config.
 
@@ -114,16 +111,16 @@ CUDA_VISIBLE_DEVICES=0,1 predict3dunet --config <CONFIG>
 - `DiceLoss` (standard `DiceLoss` defined as `1 - DiceCoefficient` used for binary semantic segmentation; when more than 2 classes are present in the ground truth, it computes the `DiceLoss` per channel and averages the values)
 - `BCEDiceLoss` (Linear combination of BCE and Dice losses, i.e. `alpha * BCE + beta * Dice`, `alpha, beta` can be specified in the `loss` section of the config)
 - `CrossEntropyLoss` (one can specify class weights via the `weight: [w_1, ..., w_k]` in the `loss` section of the config)
-- `PixelWiseCrossEntropyLoss` (one can specify per pixel weights in order to give more gradient to the important/under-represented regions in the ground truth)
+- `PixelWiseCrossEntropyLoss` (one can specify per-pixel weights in order to give more gradient to the important/under-represented regions in the ground truth; `weight` dataset has to be provided in the H5 files for training and validation; see sample config in [train_config.yml](resources/3DUnet_confocal_boundary_weighted/train_config.yml)
 - `WeightedCrossEntropyLoss` (see 'Weighted cross-entropy (WCE)' in the below paper for a detailed explanation)
-- `GeneralizedDiceLoss` (see 'Generalized Dice Loss (GDL)' in the below paper for a detailed explanation) Note: use this loss function only if the labels in the training dataset are very imbalanced e.g. one class having at least 3 orders of magnitude more voxels than the others. Otherwise use standard `DiceLoss`.
+- `GeneralizedDiceLoss` (see 'Generalized Dice Loss (GDL)' in the below paper for a detailed explanation) Note: use this loss function only if the labels in the training dataset are very imbalanced e.g. one class having at least 3 orders of magnitude more voxels than the others. Otherwise, use standard `DiceLoss`.
 
 For a detailed explanation of some of the supported loss functions see:
 [Generalised Dice overlap as a deep learning loss function for highly unbalanced segmentations](https://arxiv.org/pdf/1707.03237.pdf).
 
 ### Regression
 - `MSELoss` (mean squared error loss)
-- `L1Loss` (mean absolute errro loss)
+- `L1Loss` (mean absolute error loss)
 - `SmoothL1Loss` (less sensitive to outliers than MSELoss)
 - `WeightedSmoothL1Loss` (extension of the `SmoothL1Loss` which allows to weight the voxel values above/below a given threshold differently)
 
@@ -134,7 +131,7 @@ For a detailed explanation of some of the supported loss functions see:
 - `MeanIoU` (mean intersection over union)
 - `DiceCoefficient` (computes per channel Dice Coefficient and returns the average)
 If a 3D U-Net was trained to predict cell boundaries, one can use the following semantic instance segmentation metrics
-(the metrics below are computed by running connected components on thresholded boundary map and comparing the resulted instances to the ground truth instance segmentation): 
+(the metrics below are computed by running connected components on threshold boundary map and comparing the resulted instances to the ground truth instance segmentation): 
 - `BoundaryAveragePrecision` (Average Precision applied to the boundary probability maps: thresholds the output from the network, runs connected components to get the segmentation and computes AP between the resulting segmentation and the ground truth)
 - `AdaptedRandError` (see http://brainiac2.mit.edu/SNEMI3D/evaluation for a detailed explanation)
 - `AveragePrecision` (see https://www.kaggle.com/stkbailey/step-by-step-explanation-of-scoring-metric)
