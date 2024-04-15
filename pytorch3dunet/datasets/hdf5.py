@@ -5,7 +5,7 @@ from itertools import chain
 import h5py
 
 import pytorch3dunet.augment.transforms as transforms
-from pytorch3dunet.datasets.utils import get_slice_builder, ConfigDataset, calculate_stats
+from pytorch3dunet.datasets.utils import get_slice_builder, ConfigDataset, calculate_stats, mirror_pad
 from pytorch3dunet.unet3d.utils import get_logger
 
 logger = get_logger('HDF5Dataset')
@@ -34,9 +34,11 @@ class AbstractHDF5Dataset(ConfigDataset):
         self.phase = phase
         self.file_path = file_path
 
-        input_file = self.create_h5_file(file_path)
+        input_file = h5py.File(file_path, 'r')
 
-        self.raw = self.load_dataset(input_file, raw_internal_path)
+        self.raw = self._load_dataset(input_file, raw_internal_path)
+        self.halo_shape = slice_builder_config.get('halo_shape', [0, 0, 0])
+        self.raw_padded = mirror_pad(self.raw, self.halo_shape)
 
         stats = calculate_stats(self.raw, global_normalization)
 
@@ -46,11 +48,11 @@ class AbstractHDF5Dataset(ConfigDataset):
         if phase != 'test':
             # create label/weight transform only in train/val phase
             self.label_transform = self.transformer.label_transform()
-            self.label = self.load_dataset(input_file, label_internal_path)
+            self.label = self._load_dataset(input_file, label_internal_path)
 
             if weight_internal_path is not None:
                 # look for the weight map in the raw file
-                self.weight_map = self.load_dataset(input_file, weight_internal_path)
+                self.weight_map = self._load_dataset(input_file, weight_internal_path)
                 self.weight_transform = self.transformer.weight_transform()
             else:
                 self.weight_map = None
@@ -70,29 +72,38 @@ class AbstractHDF5Dataset(ConfigDataset):
         self.patch_count = len(self.raw_slices)
         logger.info(f'Number of patches: {self.patch_count}')
 
-    @staticmethod
-    def load_dataset(input_file, internal_path):
+    def load_dataset(self, input_file, internal_path):
+        raise NotImplementedError
+
+    def _load_dataset(self, input_file, internal_path):
         assert internal_path in input_file, f"Internal path: {internal_path} not found in the H5 file"
-        ds = input_file[internal_path][:]
+        ds = self.load_dataset(input_file, internal_path)
         assert ds.ndim in [3, 4], \
             f"Invalid dataset dimension: {ds.ndim}. Supported dataset formats: (C, Z, Y, X) or (Z, Y, X)"
         return ds
+
+    def _create_padded_indexes(self, indexes, halo_shape):
+        return tuple(slice(index.start, index.stop + 2 * halo) for index, halo in zip(indexes, halo_shape))
 
     def __getitem__(self, idx):
         if idx >= len(self):
             raise StopIteration
 
-        # get the slice for a given index 'idx'
         raw_idx = self.raw_slices[idx]
-        # get the raw data patch for a given slice
-        raw_patch_transformed = self.raw_transform(self.raw[raw_idx])
 
         if self.phase == 'test':
-            # discard the channel dimension in the slices: predictor requires only the spatial dimensions of the volume
             if len(raw_idx) == 4:
-                raw_idx = raw_idx[1:]
+                # discard the channel dimension in the slices: predictor requires only the spatial dimensions of the volume
+                raw_idx = raw_idx[1:]  # Remove the first element if raw_idx has 4 elements
+                raw_idx_padded = (slice(None),) + self._create_padded_indexes(raw_idx, self.halo_shape)
+            else:
+                raw_idx_padded = self._create_padded_indexes(raw_idx, self.halo_shape)
+
+            raw_patch_transformed = self.raw_transform(self.raw_padded[raw_idx_padded])
             return raw_patch_transformed, raw_idx
         else:
+            raw_patch_transformed = self.raw_transform(self.raw[raw_idx])
+
             # get the slice for a given index 'idx'
             label_idx = self.label_slices[idx]
             label_patch_transformed = self.label_transform(self.label[label_idx])
@@ -105,10 +116,6 @@ class AbstractHDF5Dataset(ConfigDataset):
 
     def __len__(self):
         return self.patch_count
-
-    @staticmethod
-    def create_h5_file(file_path):
-        raise NotImplementedError
 
     @staticmethod
     def _check_volume_sizes(raw, label):
@@ -182,9 +189,9 @@ class StandardHDF5Dataset(AbstractHDF5Dataset):
                          label_internal_path=label_internal_path, weight_internal_path=weight_internal_path,
                          global_normalization=global_normalization)
 
-    @staticmethod
-    def create_h5_file(file_path):
-        return h5py.File(file_path, 'r')
+    def load_dataset(self, input_file, internal_path):
+        # load the dataset from the H5 file into memory
+        return input_file[internal_path][:]
 
 
 class LazyHDF5Dataset(AbstractHDF5Dataset):
@@ -198,37 +205,8 @@ class LazyHDF5Dataset(AbstractHDF5Dataset):
                          label_internal_path=label_internal_path, weight_internal_path=weight_internal_path,
                          global_normalization=global_normalization)
 
-        logger.info("Using modified HDF5Dataset!")
+        logger.info("Using LazyHDF5Dataset")
 
-    @staticmethod
-    def create_h5_file(file_path):
-        return LazyHDF5File(file_path)
-
-
-class LazyHDF5File:
-    """Implementation of the LazyHDF5File class for the LazyHDF5Dataset."""
-
-    def __init__(self, path, internal_path=None):
-        self.path = path
-        self.internal_path = internal_path
-        if self.internal_path:
-            with h5py.File(self.path, "r") as f:
-                self.ndim = f[self.internal_path].ndim
-                self.shape = f[self.internal_path].shape
-
-    def ravel(self):
-        with h5py.File(self.path, "r") as f:
-            data = f[self.internal_path][:].ravel()
-        return data
-
-    def __getitem__(self, arg):
-        if isinstance(arg, str) and not self.internal_path:
-            return LazyHDF5File(self.path, arg)
-
-        if arg == Ellipsis:
-            return LazyHDF5File(self.path, self.internal_path)
-
-        with h5py.File(self.path, "r") as f:
-            data = f[self.internal_path][arg]
-
-        return data
+    def load_dataset(self, input_file, internal_path):
+        # load the dataset from the H5 file lazily
+        return input_file[internal_path]

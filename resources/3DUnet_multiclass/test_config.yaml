@@ -22,6 +22,8 @@ model:
 predictor:
   # standard in memory predictor
   name: 'StandardPredictor'
+  # save the output segmentation instead of probability maps, i.e. apply argmax to the output
+  save_segmentation: true
 # specify the test datasets
 loaders:
   # batch dimension; if number of GPUs is N > 1, then a batch_size of N * batch_size will automatically be taken for DataParallel
@@ -45,6 +47,8 @@ loaders:
       patch_shape: [ 80, 170, 170 ]
       # train stride between patches
       stride_shape: [ 40, 80, 80 ]
+      # raw image halo around each patch
+      halo_shape: [16, 32, 32]
 
     transformer:
       raw:

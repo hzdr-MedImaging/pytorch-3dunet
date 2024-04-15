@@ -108,7 +108,7 @@ class SliceBuilder:
                     slice_idx = (
                         slice(z, z + k_z),
                         slice(y, y + k_y),
-                        slice(x, x + k_x)
+                        slice(x, x + k_x),
                     )
                     if dataset.ndim == 4:
                         slice_idx = (slice(0, in_channels),) + slice_idx
@@ -134,7 +134,7 @@ class FilterSliceBuilder(SliceBuilder):
     Filter patches containing more than `1 - threshold` of ignore_index label
     """
 
-    def __init__(self, raw_dataset, label_dataset, weight_dataset, patch_shape, stride_shape, ignore_index=(0,),
+    def __init__(self, raw_dataset, label_dataset, weight_dataset, patch_shape, stride_shape, ignore_index=None,
                  threshold=0.6, slack_acceptance=0.01, **kwargs):
         super().__init__(raw_dataset, label_dataset, weight_dataset, patch_shape, stride_shape, **kwargs)
         if label_dataset is None:
@@ -144,15 +144,17 @@ class FilterSliceBuilder(SliceBuilder):
 
         def ignore_predicate(raw_label_idx):
             label_idx = raw_label_idx[1]
-            patch = np.copy(label_dataset[label_idx])
-            for ii in ignore_index:
-                patch[patch == ii] = 0
+            patch = label_dataset[label_idx]
+            if ignore_index is not None:
+                patch = np.copy(patch)
+                patch[patch == ignore_index] = 0
             non_ignore_counts = np.count_nonzero(patch != 0)
             non_ignore_counts = non_ignore_counts / patch.size
             return non_ignore_counts > threshold or rand_state.rand() < slack_acceptance
 
         zipped_slices = zip(self.raw_slices, self.label_slices)
         # ignore slices containing too much ignore_index
+        logger.info(f'Filtering slices...')
         filtered_slices = list(filter(ignore_predicate, zipped_slices))
         # unzip and save slices
         raw_slices, label_slices = zip(*filtered_slices)
@@ -303,3 +305,48 @@ def calculate_stats(images, global_normalization=True):
         'mean': mean,
         'std': std
     }
+
+
+def mirror_pad(image, padding_shape):
+    """
+    Pad the image with a mirror reflection of itself.
+
+    This function is used on data in its original shape before it is split into patches.
+
+    Args:
+        image (np.ndarray): The input image array to be padded.
+        padding_shape (tuple of int): Specifies the amount of padding for each dimension, should be YX or ZYX.
+
+    Returns:
+        np.ndarray: The mirror-padded image.
+
+    Raises:
+        ValueError: If any element of padding_shape is negative.
+    """
+    if any(p < 0 for p in padding_shape):
+        raise ValueError("padding_shape must be non-negative")
+
+    if all(p == 0 for p in padding_shape):
+        return image
+
+    pad_width = [(p, p) for p in padding_shape]
+    return np.pad(image, pad_width, mode='reflect')
+
+
+def remove_padding(m, padding_shape):
+    """
+    Removes padding from the margins of a multi-dimensional array.
+
+    Args:
+        m (np.ndarray): The input array to be unpadded.
+        padding_shape (tuple of int, optional): The amount of padding to remove from each dimension.
+            Assumes the tuple length matches the array dimensions.
+
+    Returns:
+        np.ndarray: The unpadded array.
+    """
+    if padding_shape is None:
+        return m
+
+    # Correctly construct slice objects for each dimension in padding_shape and apply them to m.
+    return m[(..., *(slice(p, -p or None) for p in padding_shape))]
