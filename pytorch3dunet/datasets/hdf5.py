@@ -43,11 +43,13 @@ class AbstractHDF5Dataset(ConfigDataset):
         raw_internal_path (str or list): H5 internal path to the raw dataset
         label_internal_path (str or list): H5 internal path to the label dataset
         weight_internal_path (str or list): H5 internal path to the per pixel weights (optional)
-        global_normalization (bool): if True, the mean and std of the raw data will be calculated over the whole dataset
+        global_normalization (bool): if True, the min, max, mean and std over the raw data will be calculated+used.
+        joint_normalization (bool): if True, the min, max, mean and std over the raw+label data will be calculated+used.
     """
 
     def __init__(self, file_path, phase, slice_builder_config, transformer_config, raw_internal_path='raw',
-                 label_internal_path='label', weight_internal_path=None, global_normalization=True):
+                 label_internal_path='label', weight_internal_path=None, global_normalization=True,
+                 joint_normalization=False):
         assert phase in ['train', 'val', 'test']
 
         self.phase = phase
@@ -58,10 +60,16 @@ class AbstractHDF5Dataset(ConfigDataset):
 
         self.halo_shape = slice_builder_config.get('halo_shape', [0, 0, 0])
 
-        if global_normalization:
-            logger.info('Calculating mean and std of the raw data...')
+        if global_normalization or joint_normalization:
+            if joint_normalization:
+              logger.info('Calculating joint min, max, mean and std of the raw+label data...')
+            else:
+              logger.info('Calculating global min, max, mean and std of the raw data...')
             with h5py.File(file_path, 'r') as f:
                 raw = f[raw_internal_path][:]
+                if joint_normalization:
+                  label = f[label_internal_path][:]
+                  raw = [raw, label]
                 stats = calculate_stats(raw)
         else:
             stats = calculate_stats(None, True)
@@ -203,7 +211,8 @@ class AbstractHDF5Dataset(ConfigDataset):
                               raw_internal_path=dataset_config.get('raw_internal_path', 'raw'),
                               label_internal_path=dataset_config.get('label_internal_path', 'label'),
                               weight_internal_path=dataset_config.get('weight_internal_path', None),
-                              global_normalization=dataset_config.get('global_normalization', None))
+                              global_normalization=dataset_config.get('global_normalization', None),
+                              joint_normalization=dataset_config.get('joint_normalization', None))
                 datasets.append(dataset)
             except Exception:
                 logger.error(f'Skipping {phase} set: {file_path}', exc_info=True)
@@ -218,11 +227,11 @@ class StandardHDF5Dataset(AbstractHDF5Dataset):
 
     def __init__(self, file_path, phase, slice_builder_config, transformer_config,
                  raw_internal_path='raw', label_internal_path='label', weight_internal_path=None,
-                 global_normalization=True):
+                 global_normalization=True, joint_normalization=False):
         super().__init__(file_path=file_path, phase=phase, slice_builder_config=slice_builder_config,
                          transformer_config=transformer_config, raw_internal_path=raw_internal_path,
                          label_internal_path=label_internal_path, weight_internal_path=weight_internal_path,
-                         global_normalization=global_normalization)
+                         global_normalization=global_normalization, joint_normalization=joint_normalization)
         self._raw = None
         self._raw_padded = None
         self._label = None
@@ -262,11 +271,11 @@ class LazyHDF5Dataset(AbstractHDF5Dataset):
 
     def __init__(self, file_path, phase, slice_builder_config, transformer_config,
                  raw_internal_path='raw', label_internal_path='label', weight_internal_path=None,
-                 global_normalization=False):
+                 global_normalization=False, joint_normalization=False):
         super().__init__(file_path=file_path, phase=phase, slice_builder_config=slice_builder_config,
                          transformer_config=transformer_config, raw_internal_path=raw_internal_path,
                          label_internal_path=label_internal_path, weight_internal_path=weight_internal_path,
-                         global_normalization=global_normalization)
+                         global_normalization=global_normalization, joint_normalization=joint_normalization)
 
         logger.info("Using LazyHDF5Dataset")
 
