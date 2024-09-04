@@ -7,6 +7,9 @@ from scipy.ndimage import rotate, map_coordinates, gaussian_filter, convolve
 from skimage import measure
 from skimage.filters import gaussian
 from skimage.segmentation import find_boundaries
+from pytorch3dunet.unet3d.utils import get_logger
+
+logger = get_logger('Transform')
 
 # WARN: use fixed random state for reproducibility; if you want to randomize on each run seed with `time.time()` e.g.
 GLOBAL_RANDOM_STATE = np.random.RandomState(47)
