@@ -318,7 +318,7 @@ class Decoder(nn.Module):
     Args:
         in_channels (int): number of input channels
         out_channels (int): number of output channels
-        conv_kernel_size (int or tuple): size of the convolving kernel
+        deconv_kernel_size (int or tuple): size of the deconvolving kernel
         scale_factor (int or tuple): used as the multiplier for the image H/W/D in
             case of nn.Upsample or as stride in case of ConvTranspose3d, must reverse the MaxPool3d operation
             from the corresponding encoder
@@ -335,7 +335,7 @@ class Decoder(nn.Module):
         dropout_prob (float or tuple): dropout probability, default 0.1
     """
 
-    def __init__(self, in_channels, out_channels, conv_kernel_size=3, scale_factor=2, basic_module=DoubleConv,
+    def __init__(self, in_channels, out_channels, deconv_kernel_size=3, scale_factor=2, basic_module=DoubleConv,
                  conv_layer_order='gcr', num_groups=8, padding=1, upsample='default',
                  dropout_prob=0.1, is3d=True):
         super(Decoder, self).__init__()
@@ -360,7 +360,7 @@ class Decoder(nn.Module):
             # perform deconvolution upsampling if mode is deconv
             if upsample == 'deconv':
                 self.upsampling = TransposeConvUpsampling(in_channels=in_channels, out_channels=out_channels,
-                                                          kernel_size=conv_kernel_size, scale_factor=scale_factor,
+                                                          kernel_size=deconv_kernel_size, scale_factor=scale_factor,
                                                           is3d=is3d)
             else:
                 self.upsampling = InterpolateUpsampling(mode=upsample)
@@ -379,7 +379,7 @@ class Decoder(nn.Module):
 
         self.basic_module = basic_module(in_channels, out_channels,
                                          encoder=False,
-                                         kernel_size=conv_kernel_size,
+                                         kernel_size=deconv_kernel_size,
                                          order=conv_layer_order,
                                          num_groups=num_groups,
                                          padding=padding,
@@ -435,7 +435,7 @@ def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_pa
     return nn.ModuleList(encoders)
 
 
-def create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, layer_order,
+def create_decoders(f_maps, basic_module, deconv_kernel_size, conv_padding, layer_order,
                     num_groups, upsample, dropout_prob, is3d):
     # create decoder path consisting of the Decoder modules. The length of the decoder list is equal to `len(f_maps) - 1`
     decoders = []
@@ -451,7 +451,7 @@ def create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, layer_
         decoder = Decoder(in_feature_num, out_feature_num,
                           basic_module=basic_module,
                           conv_layer_order=layer_order,
-                          conv_kernel_size=conv_kernel_size,
+                          deconv_kernel_size=deconv_kernel_size,
                           num_groups=num_groups,
                           padding=conv_padding,
                           upsample=upsample,
