@@ -5,6 +5,9 @@ from torch import nn as nn
 from torch.nn import functional as F
 
 from pytorch3dunet.unet3d.se import ChannelSELayer3D, ChannelSpatialSELayer3D, SpatialSELayer3D
+from pytorch3dunet.unet3d.utils import get_logger, Summation
+
+logger = get_logger('BuildingBlocks')
 
 
 def create_conv(in_channels, out_channels, kernel_size, order, num_groups, padding,
@@ -207,6 +210,9 @@ class ResNetBlock(nn.Module):
         self.conv3 = SingleConv(out_channels, out_channels, kernel_size=kernel_size, order=n_order,
                                 num_groups=num_groups, is3d=is3d)
 
+        # define the residual summation
+        self.residual_summation = Summation()
+
         # create non-linearity separately
         if 'l' in order:
             self.non_linearity = nn.LeakyReLU(negative_slope=0.1, inplace=True)
@@ -222,8 +228,8 @@ class ResNetBlock(nn.Module):
         # residual block
         out = self.conv2(residual)
         out = self.conv3(out)
+        out = self.residual_summation(out, residual)
 
-        out += residual
         out = self.non_linearity(out)
 
         return out
@@ -245,6 +251,61 @@ class ResNetBlockSE(ResNetBlock):
     def forward(self, x):
         out = super().forward(x)
         out = self.se_module(out)
+        return out
+
+class ResNetBypassBlock(nn.Module):
+    """
+    Residual block with a bypass connection that can be used instead of standard DoubleConv in the Encoder module.
+    Motivated by: https://ejnmmiphys.springeropen.com/articles/10.1186/s40658-024-00661-z
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size=3, order='cbld', num_groups=8,
+                 padding=1, dropout_prob=0.1, is3d=True, **kwargs):
+        super(ResNetBypassBlock, self).__init__()
+
+        # residual block convolution 1 to increase number of channels but with no bias
+        # and which will be used as input for the residual summation
+        if in_channels != out_channels:
+            if is3d:
+                self.conv1 = nn.Conv3d(in_channels, out_channels, 1, bias=False)
+            else:
+                self.conv1 = nn.Conv2d(in_channels, out_channels, 1, bias=False)
+        else:
+            self.conv1 = nn.Identity()
+
+        # residual block convolution 2 consisting of convolution+batchnorm+leakyReLU followed by Dropout
+        self.conv2 = SingleConv(in_channels, out_channels, kernel_size=kernel_size, padding=padding,
+                                order=order, num_groups=num_groups, is3d=is3d)
+
+
+        # residual block convolution 3 consisting of convolution+batchnorm+leakyReLU but no Dropout
+        self.conv3 = SingleConv(out_channels, out_channels, kernel_size=kernel_size, padding=padding,
+                                order=order.replace('d', ''), num_groups=num_groups, is3d=is3d)
+
+        # define the residual summation
+        self.residual_summation = Summation()
+
+        # create separate dropout
+        if 'd' in order:
+            self.final_dropout = nn.Dropout(p=dropout_prob)
+        elif 'D' in order:
+            self.final_dropout = nn.Dropout2d(p=dropout_prob)
+
+    def forward(self, x):
+        # apply first convolution for getting the residual
+        residual = self.conv1(x)
+        #logger.info(residual.shape)
+
+        # residual block
+        out = self.conv2(x)
+        #logger.info(out.shape)
+        out = self.conv3(out)
+        #logger.info(out.shape)
+        out = self.residual_summation(out, residual)
+
+        if self.final_dropout:
+          out = self.final_dropout(out)
+
         return out
 
 
@@ -352,7 +413,7 @@ class Decoder(nn.Module):
                     upsample = 'nearest'  # use nearest neighbor interpolation for upsampling
                     concat = True  # use concat joining
                     adapt_channels = False  # don't adapt channels
-                elif basic_module == ResNetBlock or basic_module == ResNetBlockSE:
+                elif basic_module == ResNetBlock or basic_module == ResNetBlockSE or basic_module == ResNetBypassBlock:
                     upsample = 'deconv'  # use deconvolution upsampling
                     concat = False  # use summation joining
                     adapt_channels = True  # adapt channels after joining
@@ -360,8 +421,8 @@ class Decoder(nn.Module):
             # perform deconvolution upsampling if mode is deconv
             if upsample == 'deconv':
                 self.upsampling = TransposeConvUpsampling(in_channels=in_channels, out_channels=out_channels,
-                                                          kernel_size=deconv_kernel_size, scale_factor=scale_factor,
-                                                          is3d=is3d)
+                                                          kernel_size=deconv_kernel_size, padding=padding,
+                                                          scale_factor=scale_factor, is3d=is3d)
             else:
                 self.upsampling = InterpolateUpsampling(mode=upsample)
         else:
@@ -435,7 +496,7 @@ def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_pa
     return nn.ModuleList(encoders)
 
 
-def create_decoders(f_maps, basic_module, deconv_kernel_size, conv_padding, layer_order,
+def create_decoders(f_maps, basic_module, deconv_kernel_size, deconv_padding, layer_order,
                     num_groups, upsample, dropout_prob, is3d):
     # create decoder path consisting of the Decoder modules. The length of the decoder list is equal to `len(f_maps) - 1`
     decoders = []
@@ -453,7 +514,7 @@ def create_decoders(f_maps, basic_module, deconv_kernel_size, conv_padding, laye
                           conv_layer_order=layer_order,
                           deconv_kernel_size=deconv_kernel_size,
                           num_groups=num_groups,
-                          padding=conv_padding,
+                          padding=deconv_padding,
                           upsample=upsample,
                           dropout_prob=dropout_prob,
                           is3d=is3d)
@@ -524,14 +585,14 @@ class TransposeConvUpsampling(AbstractUpsampling):
             x = self.conv_transposed(x)
             return F.interpolate(x, size=size)
 
-    def __init__(self, in_channels, out_channels, kernel_size=3, scale_factor=2, is3d=True):
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, scale_factor=2, is3d=True):
         # make sure that the output size reverses the MaxPool3d from the corresponding encoder
         if is3d is True:
             conv_transposed = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=kernel_size,
-                                                 stride=scale_factor, padding=1, bias=False)
+                                                 stride=scale_factor, padding=padding, bias=False)
         else:
             conv_transposed = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=kernel_size,
-                                                 stride=scale_factor, padding=1, bias=False)
+                                                 stride=scale_factor, padding=padding, bias=False)
         upsample = self.Upsample(conv_transposed, is3d)
         super().__init__(upsample)
 

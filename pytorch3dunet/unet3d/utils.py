@@ -7,6 +7,7 @@ import sys
 import h5py
 import numpy as np
 import torch
+import torch.nn as nn
 from torch import optim
 
 
@@ -364,3 +365,13 @@ def get_class(class_name, modules):
         if clazz is not None:
             return clazz
     raise RuntimeError(f'Unsupported dataset class: {class_name}')
+
+# inverse sigmoid nn.Module
+class InverseSigmoid(nn.Module):
+    def forward(self, input:torch.Tensor) -> torch.Tensor:
+        return torch.logit(input)
+
+# summation module
+class Summation(nn.Module):
+    def forward(self, a:torch.Tensor, b:torch.Tensor) -> torch.Tensor:
+        return a.add(b)

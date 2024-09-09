@@ -1,8 +1,9 @@
 import torch.nn as nn
 
 from pytorch3dunet.unet3d.buildingblocks import DoubleConv, ResNetBlock, ResNetBlockSE, \
-    create_decoders, create_encoders
-from pytorch3dunet.unet3d.utils import get_class, number_of_features_per_level
+    ResNetBypassBlock, create_decoders, create_encoders
+from pytorch3dunet.unet3d.utils import get_class, number_of_features_per_level, \
+    InverseSigmoid, Summation
 
 
 class AbstractUNet(nn.Module):
@@ -33,6 +34,7 @@ class AbstractUNet(nn.Module):
         deconv_kernel_size (int or tuple): size of the deconvolving kernel in the basic_module (default: same as conv)
         pool_kernel_size (int or tuple): the size of the window
         conv_padding (int or tuple): add zero-padding added to all three sides of the input
+        deconv_padding (int or tuple): add zero-padding to all three sides of the input (deconvolution)
         conv_upscale (int): number of the convolution to upscale in encoder if DoubleConv, default: 2
         upsample (str): algorithm used for decoder upsampling:
             InterpolateUpsampling:   'nearest' | 'linear' | 'bilinear' | 'trilinear' | 'area'
@@ -40,16 +42,21 @@ class AbstractUNet(nn.Module):
             No upsampling:           None
             Default: 'default' (chooses automatically)
         dropout_prob (float or tuple): dropout probability, default: 0.1
+        bypass_conn (bool): if True a bypass/skip connection is established between start of encoding and end of decoding
         is3d (bool): if True the model is 3D, otherwise 2D, default: True
     """
 
     def __init__(self, in_channels, out_channels, final_sigmoid, basic_module, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=4, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
-                 pool_kernel_size=2, conv_padding=1, conv_upscale=2, upsample='default', dropout_prob=0.1, is3d=True):
+                 pool_kernel_size=2, conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default',
+                 dropout_prob=0.1, bypass_conn=False, is3d=True):
         super(AbstractUNet, self).__init__()
 
+        # set defaults
         if deconv_kernel_size is None:
           deconv_kernel_size = conv_kernel_size
+        if deconv_padding is None:
+          deconv_padding = conv_padding
 
         if isinstance(f_maps, int):
             f_maps = number_of_features_per_level(f_maps, num_levels=num_levels)
@@ -59,13 +66,16 @@ class AbstractUNet(nn.Module):
         if 'g' in layer_order:
             assert num_groups is not None, "num_groups must be specified if GroupNorm is used"
 
+        if bypass_conn:
+            self.bypass = InverseSigmoid()
+
         # create encoder path
         self.encoders = create_encoders(in_channels, f_maps, basic_module, conv_kernel_size,
                                         conv_padding, conv_upscale, dropout_prob,
                                         layer_order, num_groups, pool_kernel_size, is3d)
 
         # create decoder path
-        self.decoders = create_decoders(f_maps, basic_module, deconv_kernel_size, conv_padding,
+        self.decoders = create_decoders(f_maps, basic_module, deconv_kernel_size, deconv_padding,
                                         layer_order, num_groups, upsample, dropout_prob,
                                         is3d)
 
@@ -85,7 +95,16 @@ class AbstractUNet(nn.Module):
             # regression problem
             self.final_activation = None
 
+        # create bypass/skip connection using inverse and non-inverse sigmoid
+        if bypass_conn:
+            self.bypass_summation = Summation()
+            self.final_activation = nn.Sigmoid()
+
     def forward(self, x):
+        # calc bypass/skip connection
+        if self.bypass is not None:
+            bypass = self.bypass(x)
+
         # encoder part
         encoders_features = []
         for encoder in self.encoders:
@@ -105,9 +124,13 @@ class AbstractUNet(nn.Module):
 
         x = self.final_conv(x)
 
+        # if bypass/skip connection is active lets run a summation
+        if self.bypass_summation:
+            x = self.bypass_summation(x, bypass)
+
         # apply final_activation (i.e. Sigmoid or Softmax) only during prediction.
         # During training the network outputs logits
-        if not self.training and self.final_activation is not None:
+        if not self.training and self.final_activation is not None or self.bypass is not None:
             x = self.final_activation(x)
 
         return x
@@ -124,7 +147,8 @@ class UNet3D(AbstractUNet):
 
     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=4, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
-                 conv_padding=1, conv_upscale=2, upsample='default', dropout_prob=0.1, **kwargs):
+                 conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
+                 **kwargs):
         super(UNet3D, self).__init__(in_channels=in_channels,
                                      out_channels=out_channels,
                                      final_sigmoid=final_sigmoid,
@@ -137,6 +161,7 @@ class UNet3D(AbstractUNet):
                                      conv_kernel_size=conv_kernel_size,
                                      deconv_kernel_size=deconv_kernel_size,
                                      conv_padding=conv_padding,
+                                     deconv_padding=deconv_padding,
                                      conv_upscale=conv_upscale,
                                      upsample=upsample,
                                      dropout_prob=dropout_prob,
@@ -153,7 +178,8 @@ class ResidualUNet3D(AbstractUNet):
 
     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=5, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
-                 conv_padding=1, conv_upscale=2, upsample='default', dropout_prob=0.1, **kwargs):
+                 conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
+                 **kwargs):
         super(ResidualUNet3D, self).__init__(in_channels=in_channels,
                                              out_channels=out_channels,
                                              final_sigmoid=final_sigmoid,
@@ -166,6 +192,7 @@ class ResidualUNet3D(AbstractUNet):
                                              conv_kernel_size=conv_kernel_size,
                                              deconv_kernel_size=deconv_kernel_size,
                                              conv_padding=conv_padding,
+                                             deconv_padding=deconv_padding,
                                              conv_upscale=conv_upscale,
                                              upsample=upsample,
                                              dropout_prob=dropout_prob,
@@ -184,7 +211,8 @@ class ResidualUNetSE3D(AbstractUNet):
 
     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=5, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
-                 conv_padding=1, conv_upscale=2, upsample='default', dropout_prob=0.1, **kwargs):
+                 conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
+                 **kwargs):
         super(ResidualUNetSE3D, self).__init__(in_channels=in_channels,
                                                out_channels=out_channels,
                                                final_sigmoid=final_sigmoid,
@@ -197,11 +225,41 @@ class ResidualUNetSE3D(AbstractUNet):
                                                conv_kernel_size=conv_kernel_size,
                                                deconv_kernel_size=deconv_kernel_size,
                                                conv_padding=conv_padding,
+                                               deconv_padding=deconv_padding,
                                                conv_upscale=conv_upscale,
                                                upsample=upsample,
                                                dropout_prob=dropout_prob,
                                                is3d=True)
 
+class ResidualBypassUNet3D(AbstractUNet):
+    """
+    Residual 3DUnet model implementation based on https://ejnmmiphys.springeropen.com/articles/10.1186/s40658-024-00661-z.
+    Uses ResNetBypassBlock as a basic building block, summation joining instead
+    of concatenation joining and transposed convolutions for upsampling (watch out for block artifacts).
+    """
+
+    def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='cbld',
+                 num_groups=8, num_levels=5, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
+                 conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
+                 bypass_conn=True, **kwargs):
+        super(ResidualBypassUNet3D, self).__init__(in_channels=in_channels,
+                                             out_channels=out_channels,
+                                             final_sigmoid=final_sigmoid,
+                                             basic_module=ResNetBypassBlock,
+                                             f_maps=f_maps,
+                                             layer_order=layer_order,
+                                             num_groups=num_groups,
+                                             num_levels=num_levels,
+                                             is_segmentation=is_segmentation,
+                                             conv_kernel_size=conv_kernel_size,
+                                             deconv_kernel_size=deconv_kernel_size,
+                                             conv_padding=conv_padding,
+                                             deconv_padding=deconv_padding,
+                                             conv_upscale=conv_upscale,
+                                             upsample=upsample,
+                                             dropout_prob=dropout_prob,
+                                             bypass_conn=bypass_conn,
+                                             is3d=True)
 
 class UNet2D(AbstractUNet):
     """
@@ -211,7 +269,8 @@ class UNet2D(AbstractUNet):
 
     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=4, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
-                 conv_padding=1, conv_upscale=2, upsample='default', dropout_prob=0.1, **kwargs):
+                 conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
+                 **kwargs):
         super(UNet2D, self).__init__(in_channels=in_channels,
                                      out_channels=out_channels,
                                      final_sigmoid=final_sigmoid,
@@ -224,6 +283,7 @@ class UNet2D(AbstractUNet):
                                      conv_kernel_size=conv_kernel_size,
                                      deconv_kernel_size=deconv_kernel_size,
                                      conv_padding=conv_padding,
+                                     deconv_padding=deconv_padding,
                                      conv_upscale=conv_upscale,
                                      upsample=upsample,
                                      dropout_prob=dropout_prob,
@@ -237,7 +297,8 @@ class ResidualUNet2D(AbstractUNet):
 
     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=5, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
-                 conv_padding=1, conv_upscale=2, upsample='default', dropout_prob=0.1, **kwargs):
+                 conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
+                 **kwargs):
         super(ResidualUNet2D, self).__init__(in_channels=in_channels,
                                              out_channels=out_channels,
                                              final_sigmoid=final_sigmoid,
@@ -250,6 +311,7 @@ class ResidualUNet2D(AbstractUNet):
                                              conv_kernel_size=conv_kernel_size,
                                              deconv_kernel_size=deconv_kernel_size,
                                              conv_padding=conv_padding,
+                                             deconv_padding=deconv_padding,
                                              conv_upscale=conv_upscale,
                                              upsample=upsample,
                                              dropout_prob=dropout_prob,
