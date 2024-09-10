@@ -165,8 +165,10 @@ class StandardPredictor(_AbstractPredictor):
         result = prediction_map / normalization_mask
         if self.save_segmentation:
             result = np.argmax(result, axis=0).astype('uint16')
-        output_file.create_dataset(self.output_dataset, data=result, compression="gzip")
-
+        dset = output_file.create_dataset(self.output_dataset, data=result, compression="gzip")
+        # copy all h5 attributes over from the raw dataset
+        for key, val in dataset.raw_attrs.items():
+            dset.attrs[key] = val
 
 class LazyPredictor(StandardPredictor):
     """

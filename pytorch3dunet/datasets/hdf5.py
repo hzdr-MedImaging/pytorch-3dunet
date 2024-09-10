@@ -109,6 +109,10 @@ class AbstractHDF5Dataset(ConfigDataset):
             self.raw_slices = slice_builder.raw_slices
             self.label_slices = slice_builder.label_slices
             self.weight_slices = slice_builder.weight_slices
+            # copy raw h5 attributes to dict
+            self.raw_attrs = {}
+            for k in raw.attrs.keys():
+                self.raw_attrs[k]= raw.attrs[k]
 
         self.patch_count = len(self.raw_slices)
         logger.info(f'Number of patches: {self.patch_count}')
@@ -298,5 +302,8 @@ class LazyHDF5Dataset(AbstractHDF5Dataset):
 
             raw = f[self.raw_internal_path][:]
             raw_padded = mirror_pad(raw, self.halo_shape)
-            f.create_dataset('raw_padded', data=raw_padded, compression='gzip')
+            dset = f.create_dataset('raw_padded', data=raw_padded, compression='gzip')
+            # copy all h5 attributes over from the raw dataset
+            for key, val in f[self.raw_internal_path].attrs.items():
+                dset.attrs[key] = val
             return raw_padded[idx]
