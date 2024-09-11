@@ -85,6 +85,11 @@ class AbstractUNet(nn.Module):
         else:
             self.final_conv = nn.Conv2d(f_maps[0], out_channels, 1)
 
+        # create bypass/skip connection using inverse and non-inverse sigmoid
+        if bypass_conn:
+            self.bypass_summation = Summation()
+            self.bypass_activation = nn.Sigmoid()
+
         if is_segmentation:
             # semantic segmentation problem
             if final_sigmoid:
@@ -94,11 +99,6 @@ class AbstractUNet(nn.Module):
         else:
             # regression problem
             self.final_activation = None
-
-        # create bypass/skip connection using inverse and non-inverse sigmoid
-        if bypass_conn:
-            self.bypass_summation = Summation()
-            self.final_activation = nn.Sigmoid()
 
     def forward(self, x):
         # calc bypass/skip connection
@@ -124,13 +124,15 @@ class AbstractUNet(nn.Module):
 
         x = self.final_conv(x)
 
-        # if bypass/skip connection is active lets run a summation
-        if self.bypass_summation:
+        # if bypass/skip connection is active lets run a summation followed
+        # by an activation
+        if self.bypass:
             x = self.bypass_summation(x, bypass)
+            x = self.bypass_activation(x)
 
         # apply final_activation (i.e. Sigmoid or Softmax) only during prediction.
         # During training the network outputs logits
-        if not self.training and self.final_activation is not None or self.bypass is not None:
+        if not self.training and self.final_activation is not None:
             x = self.final_activation(x)
 
         return x
