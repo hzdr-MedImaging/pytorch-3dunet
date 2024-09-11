@@ -14,6 +14,7 @@ from pytorch3dunet.datasets.hdf5 import AbstractHDF5Dataset
 from pytorch3dunet.datasets.utils import SliceBuilder, remove_padding
 from pytorch3dunet.unet3d.model import UNet2D
 from pytorch3dunet.unet3d.utils import get_logger
+from pytorch3dunet.augment.transforms import Normalize
 
 logger = get_logger('UNetPredictor')
 
@@ -165,7 +166,24 @@ class StandardPredictor(_AbstractPredictor):
         result = prediction_map / normalization_mask
         if self.save_segmentation:
             result = np.argmax(result, axis=0).astype('uint16')
+
+        # check if the data has been normalized and if so we denormalize it
+        # in case global normalization is enabled
+        for t in dataset.raw_transform.transforms:
+            if isinstance(t, Normalize):
+                # min/max only exists if global normalization is active
+                min_value = t.min_value
+                max_value = t.max_value
+                if min_value is not None and max_value is not None:
+                    logger.info(f'Denormalizing final result data')
+                    if t.norm01 is False: # [-1, 1] normalization case
+                      result = (result + 1) / 2
+                    result *= (max_value - min_value + t.eps) + min_value
+                break
+
+        # create hdf5 dataset
         dset = output_file.create_dataset(self.output_dataset, data=result, compression="gzip")
+
         # copy all h5 attributes over from the raw dataset
         for key, val in dataset.raw_attrs.items():
             dset.attrs[key] = val
