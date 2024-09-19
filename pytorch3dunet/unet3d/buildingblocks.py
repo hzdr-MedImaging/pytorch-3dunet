@@ -265,13 +265,10 @@ class ResNetBypassBlock(nn.Module):
 
         # residual block convolution 1 to increase number of channels but with no bias
         # and which will be used as input for the residual summation
-        if in_channels != out_channels:
-            if is3d:
-                self.conv1 = nn.Conv3d(in_channels, out_channels, 1, bias=False)
-            else:
-                self.conv1 = nn.Conv2d(in_channels, out_channels, 1, bias=False)
+        if is3d:
+            self.conv1 = nn.Conv3d(in_channels, out_channels, 1, bias=False)
         else:
-            self.conv1 = nn.Identity()
+            self.conv1 = nn.Conv2d(in_channels, out_channels, 1, bias=False)
 
         # residual block convolution 2 consisting of convolution+batchnorm+leakyReLU followed by Dropout
         self.conv2 = SingleConv(in_channels, out_channels, kernel_size=kernel_size, padding=padding,
@@ -462,8 +459,8 @@ class Decoder(nn.Module):
 
 
 def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_padding,
-                    conv_upscale, dropout_prob,
-                    layer_order, num_groups, pool_kernel_size, is3d):
+                    conv_upscale, dropout_prob, layer_order, num_groups, pool_kernel_size,
+                    bottleneck_encoder, is3d):
     # create encoder path consisting of Encoder modules. Depth of the encoder is equal to `len(f_maps)`
     encoders = []
     for i, out_feature_num in enumerate(f_maps):
@@ -490,6 +487,28 @@ def create_encoders(in_channels, f_maps, basic_module, conv_kernel_size, conv_pa
                               upscale=conv_upscale,
                               dropout_prob=dropout_prob,
                               is3d=is3d)
+
+            # add an additional bottleneck encoder in case this is wanted at
+            # the last encoder step
+            if i == len(f_maps)-1 and bottleneck_encoder is True:
+              # add previous encoder first
+              encoders.append(encoder)
+
+              # create bottleneck encoder with same feature numbers for
+              # input and output but without pooling. This should strengthen
+              # the capabailities of the network without a skip connection at the
+              # bottom
+              encoder = Encoder(out_feature_num, out_feature_num,
+                                apply_pooling=False,  # skip pooling in the bottleneck encoder
+                                basic_module=basic_module,
+                                conv_layer_order=layer_order,
+                                conv_kernel_size=conv_kernel_size,
+                                num_groups=num_groups,
+                                pool_kernel_size=pool_kernel_size,
+                                padding=conv_padding,
+                                upscale=conv_upscale,
+                                dropout_prob=dropout_prob,
+                                is3d=is3d)
 
         encoders.append(encoder)
 

@@ -43,13 +43,15 @@ class AbstractUNet(nn.Module):
             Default: 'default' (chooses automatically)
         dropout_prob (float or tuple): dropout probability, default: 0.1
         bypass_conn (bool): if True a bypass/skip connection is established between start of encoding and end of decoding
+        bottleneck_encoder (bool): if True an additional encoder with same number of features will be added as a final
+            bottleneck_encoder step
         is3d (bool): if True the model is 3D, otherwise 2D, default: True
     """
 
     def __init__(self, in_channels, out_channels, final_sigmoid, basic_module, f_maps=64, layer_order='gcr',
                  num_groups=8, num_levels=4, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
                  pool_kernel_size=2, conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default',
-                 dropout_prob=0.1, bypass_conn=False, is3d=True):
+                 dropout_prob=0.1, bypass_conn=False, bottleneck_encoder=False, is3d=True):
         super(AbstractUNet, self).__init__()
 
         # set defaults
@@ -57,6 +59,9 @@ class AbstractUNet(nn.Module):
           deconv_kernel_size = conv_kernel_size
         if deconv_padding is None:
           deconv_padding = conv_padding
+
+        # set variables we need in the forward phase
+        self.bottleneck_encoder = bottleneck_encoder
 
         if isinstance(f_maps, int):
             f_maps = number_of_features_per_level(f_maps, num_levels=num_levels)
@@ -72,7 +77,8 @@ class AbstractUNet(nn.Module):
         # create encoder path
         self.encoders = create_encoders(in_channels, f_maps, basic_module, conv_kernel_size,
                                         conv_padding, conv_upscale, dropout_prob,
-                                        layer_order, num_groups, pool_kernel_size, is3d)
+                                        layer_order, num_groups, pool_kernel_size, bottleneck_encoder,
+                                        is3d)
 
         # create decoder path
         self.decoders = create_decoders(f_maps, basic_module, deconv_kernel_size, deconv_padding,
@@ -115,6 +121,12 @@ class AbstractUNet(nn.Module):
         # remove the last encoder's output from the list
         # !!remember: it's the 1st in the list
         encoders_features = encoders_features[1:]
+
+        # remove the second last encoder output from the list
+        # as well in case we are having an additional bottleneck
+        # encoder (it is the 1st in the reversed list)
+        if self.bottleneck_encoder is True:
+            encoders_features = encoders_features[1:]
 
         # decoder part
         for decoder, encoder_features in zip(self.decoders, encoders_features):
@@ -243,7 +255,7 @@ class ResidualBypassUNet3D(AbstractUNet):
     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='cbld',
                  num_groups=8, num_levels=5, is_segmentation=True, conv_kernel_size=3, deconv_kernel_size=None,
                  conv_padding=1, deconv_padding=None, conv_upscale=2, upsample='default', dropout_prob=0.1,
-                 bypass_conn=True, **kwargs):
+                 bypass_conn=True, bottleneck_encoder=True, **kwargs):
         super(ResidualBypassUNet3D, self).__init__(in_channels=in_channels,
                                              out_channels=out_channels,
                                              final_sigmoid=final_sigmoid,
@@ -261,6 +273,7 @@ class ResidualBypassUNet3D(AbstractUNet):
                                              upsample=upsample,
                                              dropout_prob=dropout_prob,
                                              bypass_conn=bypass_conn,
+                                             bottleneck_encoder=bottleneck_encoder,
                                              is3d=True)
 
 class UNet2D(AbstractUNet):
